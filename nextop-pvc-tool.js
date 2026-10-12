@@ -93,6 +93,7 @@
       s.wrap.innerHTML='';s.wrap.appendChild(s.canvas);
       defaultPoints(s);
       drawSource(s);
+      bindCanvasDrag(s);
       s.reset.disabled=false;s.crop.disabled=false;
       s.help.textContent='চারটি সবুজ পয়েন্ট আগে থেকেই দেখানো আছে। পয়েন্ট টেনে কার্ডের চার কোণায় বসান।';
       URL.revokeObjectURL(url);
@@ -176,32 +177,51 @@
     });
     s.canvas=null;
   });
-  // Drag-to-adjust points works with mouse, touchscreen and stylus.
-  root.addEventListener('pointerdown',function(e){
-    for(const s of Object.values(sides)){
-      if(s.canvas && e.target===s.canvas && s.points.length===4){
-        const p=canvasPoint(s,e),idx=nearestPoint(s,p);
-        if(idx!==-1){
-          s.dragIndex=idx;s.pointerDown=true;
-          if(s.canvas.setPointerCapture)s.canvas.setPointerCapture(e.pointerId);
-          e.preventDefault();return;
-        }
-      }
+  // Attach drag handlers directly to each canvas (more reliable than delegated events).
+  function bindCanvasDrag(s){
+    const canvas=s.canvas;
+    if(!canvas || canvas.dataset.dragBound==='1') return;
+    canvas.dataset.dragBound='1';
+    canvas.style.touchAction='none';
+    canvas.style.cursor='grab';
+    canvas.addEventListener('pointerdown',function(e){
+      if(s.points.length!==4) return;
+      const p=canvasPoint(s,e),idx=nearestPoint(s,p);
+      if(idx===-1) return;
+      s.dragIndex=idx;s.pointerDown=true;
+      canvas.style.cursor='grabbing';
+      try{canvas.setPointerCapture(e.pointerId);}catch(_){}
+      e.preventDefault();
+    });
+    canvas.addEventListener('pointermove',function(e){
+      if(!s.pointerDown || s.dragIndex===-1) return;
+      s.points[s.dragIndex]=canvasPoint(s,e);
+      clearOutput(s);drawSource(s);
+      s.help.textContent='পয়েন্ট '+(s.dragIndex+1)+' সরানো হচ্ছে। চার কোণা ঠিক হলে Crop / Straighten চাপুন।';
+      e.preventDefault();
+    });
+    function stop(e){
+      s.pointerDown=false;s.dragIndex=-1;
+      canvas.style.cursor='grab';
+      try{if(e && canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);}catch(_){}
     }
-  });
-  root.addEventListener('pointermove',function(e){
-    for(const s of Object.values(sides)){
-      if(s.canvas&&s.pointerDown&&s.dragIndex!==-1){
-        s.points[s.dragIndex]=canvasPoint(s,e);
-        clearOutput(s);drawSource(s);
-        s.help.textContent='পয়েন্ট '+(s.dragIndex+1)+' সরানো হচ্ছে। চার কোণা ঠিক হলে Crop / Straighten চাপুন।';
-        e.preventDefault();return;
-      }
-    }
-  });
-  function stopDrag(){Object.values(sides).forEach(s=>{s.pointerDown=false;s.dragIndex=-1;});}
-  root.addEventListener('pointerup',stopDrag);
-  root.addEventListener('pointercancel',stopDrag);
+    canvas.addEventListener('pointerup',stop);
+    canvas.addEventListener('pointercancel',stop);
+    canvas.addEventListener('lostpointercapture',()=>{s.pointerDown=false;s.dragIndex=-1;canvas.style.cursor='grab';});
+    // Fallback for older browsers that do not support Pointer Events.
+    canvas.addEventListener('mousedown',function(e){
+      if(window.PointerEvent || s.points.length!==4) return;
+      const p=canvasPoint(s,e),idx=nearestPoint(s,p);
+      if(idx!==-1){s.dragIndex=idx;s.pointerDown=true;e.preventDefault();}
+    });
+    window.addEventListener('mousemove',function(e){
+      if(window.PointerEvent || !s.pointerDown || s.dragIndex===-1)return;
+      s.points[s.dragIndex]=canvasPoint(s,e);clearOutput(s);drawSource(s);
+    });
+    window.addEventListener('mouseup',function(){
+      if(!window.PointerEvent){s.pointerDown=false;s.dragIndex=-1;}
+    });
+  }
   function cropSide(s){
     if(!cvReady){alert('Perspective engine এখনও লোড হয়নি। ইন্টারনেট সংযোগ পরীক্ষা করে কয়েক সেকেন্ড পরে চেষ্টা করুন।');return;}
     if(!s.img||s.points.length!==4){alert('ছবির চারটি কোণা নির্বাচন করুন। সবুজ পয়েন্টগুলো টেনে কার্ডের চার কোণায় বসান।');return;}
