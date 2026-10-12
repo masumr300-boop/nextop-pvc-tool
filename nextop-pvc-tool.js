@@ -94,12 +94,68 @@
       defaultPoints(s);
       drawSource(s);
       s.reset.disabled=false;s.crop.disabled=false;
-      s.help.textContent='সবুজ বড় পয়েন্টগুলো আগে থেকেই দেওয়া আছে। ১) উপরে-বামে ২) উপরে-ডানে ৩) নিচে-ডানে ৪) নিচে-বামে পয়েন্ট টেনে কার্ডের আসল কোণায় বসান।';
+      s.help.textContent='চারটি সবুজ পয়েন্ট আগে থেকেই দেখানো আছে। পয়েন্ট টেনে কার্ডের চার কোণায় বসান।';
       URL.revokeObjectURL(url);
+      // When OpenCV is ready, try to detect the card's quadrilateral automatically.
+      autoDetectQuad(s, 0);
     };
     img.onerror=()=>{URL.revokeObjectURL(url);alert('ছবিটি খোলা যায়নি। অন্য ছবি চেষ্টা করুন।');};
     img.src=url;
   }
+
+  function autoDetectQuad(s, attempt){
+    if(!s.canvas || !s.img) return;
+    if(!window.cv || !window.cv.Mat){
+      if(attempt<30) setTimeout(()=>autoDetectQuad(s,attempt+1),350);
+      return;
+    }
+    let src=null,gray=null,blur=null,edges=null,contours=null,hierarchy=null;
+    try{
+      src=cv.imread(s.canvas);
+      gray=new cv.Mat();blur=new cv.Mat();edges=new cv.Mat();
+      cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY,0);
+      cv.GaussianBlur(gray,blur,new cv.Size(5,5),0,0,cv.BORDER_DEFAULT);
+      cv.Canny(blur,edges,35,110);
+      contours=new cv.MatVector();hierarchy=new cv.Mat();
+      cv.findContours(edges,contours,hierarchy,cv.RETR_LIST,cv.CHAIN_APPROX_SIMPLE);
+      const areaTotal=s.canvas.width*s.canvas.height;
+      let best=null,bestArea=0;
+      for(let i=0;i<contours.size();i++){
+        const c=contours.get(i), peri=cv.arcLength(c,true), approx=new cv.Mat();
+        cv.approxPolyDP(c,approx,0.025*peri,true);
+        if(approx.rows===4 && cv.isContourConvex(approx)){
+          const area=Math.abs(cv.contourArea(approx));
+          if(area>areaTotal*0.012 && area<areaTotal*0.82 && area>bestArea){
+            const pts=[];
+            for(let j=0;j<4;j++)pts.push({x:approx.intPtr(j,0)[0],y:approx.intPtr(j,0)[1]});
+            // Order as top-left, top-right, bottom-right, bottom-left.
+            const sum=pts.map(p=>p.x+p.y),diff=pts.map(p=>p.x-p.y);
+            const tl=pts[sum.indexOf(Math.min(...sum))];
+            const br=pts[sum.indexOf(Math.max(...sum))];
+            const tr=pts[diff.indexOf(Math.max(...diff))];
+            const bl=pts[diff.indexOf(Math.min(...diff))];
+            const ordered=[tl,tr,br,bl];
+            const unique=new Set(ordered.map(p=>pts.indexOf(p)));
+            if(unique.size===4){
+              best=ordered;bestArea=area;
+            }
+          }
+        }
+        approx.delete();c.delete();
+      }
+      if(best && best.length===4){
+        s.points=best.map(p=>({x:Math.max(0,Math.min(s.canvas.width,p.x)),y:Math.max(0,Math.min(s.canvas.height,p.y))}));
+        drawSource(s);
+        s.help.textContent='কার্ডের চার কোণা স্বয়ংক্রিয়ভাবে খোঁজা হয়েছে। দরকার হলে বড় সবুজ পয়েন্ট টেনে ঠিক করুন, তারপর Crop / Straighten চাপুন।';
+      }
+    }catch(err){
+      // Keep the visible movable starter points if automatic detection is uncertain.
+      console.warn('Auto corner detection skipped:',err);
+    }finally{
+      [src,gray,blur,edges,contours,hierarchy].forEach(o=>{if(o&&o.delete)o.delete();});
+    }
+  }
+
   function canvasPoint(s,e){
     const r=s.canvas.getBoundingClientRect();
     return {x:Math.max(0,Math.min(s.canvas.width,(e.clientX-r.left)*(s.canvas.width/r.width))),
